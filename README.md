@@ -39,4 +39,4 @@ In `wandb.ai` will be logged:
 
 `python inference.py "Your text for speech synthesis" `
 
-The result will be saved in `audio.wav`.
+The result will be logged in wandb.ai.
