@@ -14,11 +14,11 @@ class ModelConfig:
     input_dim: int = 34
     batch_size: int = 20
     num_workers: int = 8
-    from_pretrained: bool = True
+    from_pretrained: bool = False
     lr: float = 0.001
     num_epochs: int = 20
-    start_epoch: int = 3
-    model_path: str = "tacotron_notg.pth"
+    start_epoch: int = 0
+    model_path: str = "tacotron_mon.pth"
     wandb_log: bool = True
     num_channels: int = 80
 

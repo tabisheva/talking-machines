@@ -34,12 +34,11 @@ with torch.no_grad():
     y_pred = model.inference(torch.tensor(text_ids))
 
 test_wav = vocoder.inference(y_pred[0][:1]).squeeze()
-if model_config.wandb_log:
-    wandb.init(project="text2speech")
-    wandb.log({
+wandb.init(project="text2speech")
+wandb.log({
                "inference audio": [wandb.Audio(test_wav.cpu(), caption=text, sample_rate=22050)],
                })
-    for prob in y_pred[2][0].squeeze().detach().cpu().numpy():
-        wandb.log({
+for prob in y_pred[2][0].squeeze().detach().cpu().numpy():
+    wandb.log({
                "probs stop token": prob,
                })

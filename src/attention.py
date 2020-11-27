@@ -95,6 +95,7 @@ class Attention(nn.Module):
 
         return attention_context, attention_weights
 
+
 class MonotonicAttention(Attention):
     # https://github.com/j-min/MoChA-pytorch
     def __init__(self, *args, **kwargs):
@@ -105,53 +106,46 @@ class MonotonicAttention(Attention):
         return torch.empty_like(tensor_like).normal_()
 
     def safe_cumprod(self, x):
-        return torch.clamp(torch.exp(torch.cumsum(torch.log(torch.clamp(x, min=1e-10, max=1)), dim=1)), min=1e-45)
+        return torch.cumsum(torch.log(torch.clamp(x, min=1e-10, max=1)), dim=1)
 
     def exclusive_cumprod(self, x):
         batch_size, sequence_length = x.size()
-        if torch.cuda.is_available():
-            one_x = torch.cat([torch.ones(batch_size, 1).cuda(), x], dim=1)[:, :-1]
-        else:
-            one_x = torch.cat([torch.ones(batch_size, 1), x], dim=1)[:, :-1]
+        one_x = torch.cat([torch.ones(batch_size, 1).to(x.device), x], dim=1)[:, :-1]
         return torch.cumprod(one_x, dim=1)
 
     def forward(self,
-        attention_hidden_state,
-        memory,
-        processed_memory,
-        attention_weights_cat,
-        mask
-    ):
-
+                attention_hidden_state,
+                memory,
+                processed_memory,
+                attention_weights_cat,
+                mask
+                ):
+        prev_attention = attention_weights_cat[:, 0]
         if attention_weights_cat.sum() == 0:
-            alpha = torch.zeros_like(attention_weights_cat[:, 0], requires_grad=True)
+            alpha = torch.zeros_like(prev_attention)
             alpha[:, 0] = 1.
-            attention_context = torch.bmm(alpha.unsqueeze(1), memory)
-            attention_context = attention_context.squeeze(1)
-            return attention_context, alpha
         else:
             alignment = super().get_alignment_energies(
-                    attention_hidden_state, processed_memory, attention_weights_cat
+                attention_hidden_state, processed_memory, attention_weights_cat
             )
             if self.training:
+                alignment += self.gaussian_noise(alignment)
                 if mask is not None:
                     alignment = alignment.data.masked_fill_(mask, self.score_mask_value)
-                p_select = self.sigmoid(alignment + self.gaussian_noise(alignment))
+                p_select = self.sigmoid(alignment)
                 cumprod_1_minus_p = self.safe_cumprod(1 - p_select)
-                alpha = p_select * cumprod_1_minus_p * \
-                    torch.cumsum(attention_weights_cat[:, 0] / cumprod_1_minus_p, dim=1)
-                attention_context = torch.bmm(alpha.unsqueeze(1), memory)
-                attention_context = attention_context.squeeze(1)
-                return attention_context, alpha
+                log_attention_weights_prev = torch.log(torch.clamp(prev_attention, min=1e-10))
+                alpha = p_select * torch.exp(cumprod_1_minus_p) * torch.clamp(
+                    torch.cumsum(torch.exp(log_attention_weights_prev - cumprod_1_minus_p), dim=1), max=1e35)
             else:
                 above_threshold = (alignment > 0).float()
-                p_select = above_threshold * torch.cumsum(attention_weights_cat[:, 0], dim=1)
-                attention = p_select * self.exclusive_cumprod(1 - p_select)
+                p_select = above_threshold * torch.cumsum(prev_attention, dim=1)
+                alpha = p_select * self.exclusive_cumprod(1 - p_select)
 
-                attended = attention.sum(dim=1)
+                attended = alpha.sum(dim=1)
                 for batch_i in range(attention_weights_cat.shape[0]):
                     if not attended[batch_i]:
-                        attention[batch_i, -1] = 1
-                attention_context = torch.bmm(attention.unsqueeze(1), memory)
-                attention_context = attention_context.squeeze(1)
-                return attention_context, attention
+                        alpha[batch_i, -1] = 1
+        attention_context = torch.bmm(alpha.unsqueeze(1), memory)
+        attention_context = attention_context.squeeze(1)
+        return attention_context, alpha

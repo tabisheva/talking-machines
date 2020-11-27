@@ -87,7 +87,7 @@ class Decoder(nn.Module):
         self.device = device
         self.prenet = Prenet()
         self.attention_rnn = nn.LSTMCell(256 + 512, 1024)
-        self.attention_layer = Attention(1024, 512, 128, 32, 31)
+        self.attention_layer = MonotonicAttention(1024, 512, 128, 32, 31)
         self.decoder_rnn = nn.LSTMCell(1024 + 512, 1024)
         self.linear_projection = nn.Linear(1024 + 512, 80)
         self.gate_layer = nn.Linear(1024 + 512, 1)

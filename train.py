@@ -35,7 +35,7 @@ test_dataloader = DataLoader(test_dataset,
                              collate_fn=collate_fn,
                              pin_memory=True)
 
-device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
 model = Tacotron2(model_config, device)
 vocoder = Vocoder(device)
