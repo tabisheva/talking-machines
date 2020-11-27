@@ -76,7 +76,6 @@ class Attention(nn.Module):
             processed_memory,
             attention_weights_cat,
             mask,
-            step=None
     ):
         """
         attention_hidden_state: attention rnn last output
@@ -89,17 +88,70 @@ class Attention(nn.Module):
         alignment = self.get_alignment_energies(
             attention_hidden_state, processed_memory, attention_weights_cat
         )
-        # guided attention
-        if step is not None:
-            N = alignment.shape[-1]
-            frames_pos = torch.tensor([step]).view(1, 1)
-            chars_pos = (torch.arange(1, N + 1) / N).view(1, N)
-            guide_mask = torch.exp(-(frames_pos - chars_pos) ** 2 / 0.08)
-            alignment = alignment * guide_mask.to(alignment.device)
-            alignment = alignment.masked_fill(mask, self.score_mask_value)
 
         attention_weights = F.softmax(alignment, dim=1)
         attention_context = torch.bmm(attention_weights.unsqueeze(1), memory)
         attention_context = attention_context.squeeze(1)
 
         return attention_context, attention_weights
+
+class MonotonicAttention(Attention):
+    # https://github.com/j-min/MoChA-pytorch
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.sigmoid = nn.Sigmoid()
+
+    def gaussian_noise(self, tensor_like):
+        return torch.empty_like(tensor_like).normal_()
+
+    def safe_cumprod(self, x):
+        return torch.clamp(torch.exp(torch.cumsum(torch.log(torch.clamp(x, min=1e-10, max=1)), dim=1)), min=1e-45)
+
+    def exclusive_cumprod(self, x):
+        batch_size, sequence_length = x.size()
+        if torch.cuda.is_available():
+            one_x = torch.cat([torch.ones(batch_size, 1).cuda(), x], dim=1)[:, :-1]
+        else:
+            one_x = torch.cat([torch.ones(batch_size, 1), x], dim=1)[:, :-1]
+        return torch.cumprod(one_x, dim=1)
+
+    def forward(self,
+        attention_hidden_state,
+        memory,
+        processed_memory,
+        attention_weights_cat,
+        mask
+    ):
+
+        if attention_weights_cat.sum() == 0:
+            alpha = torch.zeros_like(attention_weights_cat[:, 0], requires_grad=True)
+            alpha[:, 0] = 1.
+            attention_context = torch.bmm(alpha.unsqueeze(1), memory)
+            attention_context = attention_context.squeeze(1)
+            return attention_context, alpha
+        else:
+            alignment = super().get_alignment_energies(
+                    attention_hidden_state, processed_memory, attention_weights_cat
+            )
+            if self.training:
+                if mask is not None:
+                    alignment = alignment.data.masked_fill_(mask, self.score_mask_value)
+                p_select = self.sigmoid(alignment + self.gaussian_noise(alignment))
+                cumprod_1_minus_p = self.safe_cumprod(1 - p_select)
+                alpha = p_select * cumprod_1_minus_p * \
+                    torch.cumsum(attention_weights_cat[:, 0] / cumprod_1_minus_p, dim=1)
+                attention_context = torch.bmm(alpha.unsqueeze(1), memory)
+                attention_context = attention_context.squeeze(1)
+                return attention_context, alpha
+            else:
+                above_threshold = (alignment > 0).float()
+                p_select = above_threshold * torch.cumsum(attention_weights_cat[:, 0], dim=1)
+                attention = p_select * self.exclusive_cumprod(1 - p_select)
+
+                attended = attention.sum(dim=1)
+                for batch_i in range(attention_weights_cat.shape[0]):
+                    if not attended[batch_i]:
+                        attention[batch_i, -1] = 1
+                attention_context = torch.bmm(attention.unsqueeze(1), memory)
+                attention_context = attention_context.squeeze(1)
+                return attention_context, attention

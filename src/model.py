@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from config import PostnetConfig
-from src.attention import Attention
+from src.attention import Attention, MonotonicAttention
 from src.preprocessing import get_mask_from_lengths
 
 
@@ -92,7 +92,7 @@ class Decoder(nn.Module):
         self.linear_projection = nn.Linear(1024 + 512, 80)
         self.gate_layer = nn.Linear(1024 + 512, 1)
 
-    def decode(self, decoder_input, step):
+    def decode(self, decoder_input):
         ''' Decoder step using stored states, attention and memory
         PARAMS
         ------
@@ -110,30 +110,26 @@ class Decoder(nn.Module):
         self.attention_hidden, self.attention_cell = self.attention_rnn(
             cell_input, (self.attention_hidden, self.attention_cell))
 
-        self.attention_hidden = F.dropout(self.attention_hidden, 0.1)  # training True
+        self.attention_hidden = F.dropout(self.attention_hidden, 0.1)
 
-        attention_weights_cat = torch.cat(
-            (self.attention_weights.unsqueeze(1),
+        attention_weights_cat = torch.cat((self.attention_weights.unsqueeze(1),
              self.attention_weights_cum.unsqueeze(1)), dim=1)
-        self.attention_context, self.attention_weights = self.attention_layer(
-            self.attention_hidden, self.memory, self.processed_memory,
-            attention_weights_cat, self.mask, step)
 
+        self.attention_context, self.attention_weights = self.attention_layer(
+            self.attention_hidden, self.memory, self.processed_memory, attention_weights_cat, self.mask)
+#        print(self.attention_weights)
         self.attention_weights_cum += self.attention_weights
 
-        decoder_input = torch.cat(
-            (self.attention_hidden, self.attention_context), -1)
+        decoder_input = torch.cat((self.attention_hidden, self.attention_context), -1)
 
         # Second LSTMCell with hidden_size 1024
         self.decoder_hidden, self.decoder_cell = self.decoder_rnn(
             decoder_input, (self.decoder_hidden, self.decoder_cell))
-        self.decoder_hidden = F.dropout(self.decoder_hidden, 0.1)  # training true
+        self.decoder_hidden = F.dropout(self.decoder_hidden, 0.1)
 
         # linear layer for mel prediction
-        decoder_hidden_attention_context = torch.cat(
-            (self.decoder_hidden, self.attention_context), dim=1)
-        decoder_output = self.linear_projection(
-            decoder_hidden_attention_context)
+        decoder_hidden_attention_context = torch.cat((self.decoder_hidden, self.attention_context), dim=1)
+        decoder_output = self.linear_projection(decoder_hidden_attention_context)
 
         # binary classifier for stop token
         gate_prediction = torch.sigmoid(self.gate_layer(decoder_hidden_attention_context))
@@ -176,8 +172,7 @@ class Decoder(nn.Module):
         mel_outputs, gate_outputs, alignments = [], [], []
         for i in range(decoder_inputs.size(0) - 1):
             decoder_input = decoder_inputs[len(mel_outputs)]
-            step = (i + 1) / decoder_inputs.size(0)
-            mel_output, gate_output, attention_weights = self.decode(decoder_input, step)
+            mel_output, gate_output, attention_weights = self.decode(decoder_input)
             mel_outputs += [mel_output.squeeze(1)]
             gate_outputs += [gate_output.squeeze()]
             alignments += [attention_weights]
@@ -197,8 +192,7 @@ class Decoder(nn.Module):
         :return:
         """
         # start mel frame with zeros (1, B, num_mels)
-        raise NotImplementedError
-        decoder_input = torch.zeros((1, memory.size(0), 80)).to(self.device)
+        decoder_input = torch.zeros((1, memory.size(0), 80)).to(self.device).squeeze(0)
         # (B, num_mels, T) -> (T, B, num_mels)
 
         self.initialize_decoder_states(
@@ -209,11 +203,12 @@ class Decoder(nn.Module):
             decoder_input = self.prenet(decoder_input)
             mel_output, gate_output, attention_weights = self.decode(decoder_input)
             mel_outputs += [mel_output.squeeze(1)]
-            gate_outputs += [gate_output.squeeze()]
+            gate_outputs += [gate_output.squeeze(0)]
             alignments += [attention_weights]
-            if torch.sigmoid(gate_output.data) > 0.5:
-                print('Terminated by gate.')
+            if torch.sigmoid(gate_output).item() > 0.6:
+                print('Terminated by gate', torch.sigmoid(gate_output).item())
                 break
+            decoder_input = mel_output
         alignments = torch.stack(alignments).transpose(0, 1)
         gate_outputs = torch.stack(gate_outputs).transpose(0, 1).contiguous()
         mel_outputs = torch.stack(mel_outputs).transpose(0, 1).contiguous()
@@ -252,7 +247,7 @@ class Tacotron2(nn.Module):
         encoder_outputs = self.encoder(text_inputs, text_lengths)
 
         mel_outputs, gate_outputs, alignments = self.decoder.inference(
-            encoder_outputs, mels, memory_lengths=text_lengths)
+            encoder_outputs, memory_lengths=text_lengths)
 
         mel_outputs_postnet = self.postnet(mel_outputs)
         mel_outputs_postnet = mel_outputs + mel_outputs_postnet

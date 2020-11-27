@@ -12,13 +12,13 @@ class MelSpectrogramConfig:
 
 class ModelConfig:
     input_dim: int = 34
-    batch_size: int = 32
+    batch_size: int = 20
     num_workers: int = 8
     from_pretrained: bool = False
-    lr: float = 0.0001
-    num_epochs: int = 10
+    lr: float = 0.001
+    num_epochs: int = 20
     start_epoch: int = 3
-    model_path: str = "tacotron.pth"
+    model_path: str = "tacotron_3.pth"
     wandb_log: bool = True
     num_channels: int = 80
 

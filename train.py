@@ -89,10 +89,9 @@ for epoch in range(start_epoch, model_config.num_epochs + 1):
                    "test audio teacher forcing": [wandb.Audio(test_wav.cpu(), caption=original_text, sample_rate=22050)],
                    "predicted melspec": [wandb.Image(y_pred[1][0].detach().cpu().numpy())],
                    "attention": [wandb.Image(y_pred[3][0].T.detach().cpu().numpy())],
-                   "probs stop token": y_pred[2][0].detach().cpu().numpy(),
                    "ground truth melspec": [wandb.Image(y[0][0].detach().cpu().numpy())]
                    })
 
     if val_loss < best_loss:
         best_loss = val_loss
-        torch.save(model.state_dict(), "tacotron.pth")
+        torch.save(model.state_dict(), "tacotron_mon.pth")
