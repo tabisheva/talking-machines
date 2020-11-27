@@ -37,8 +37,4 @@ class Tacotron2Loss(nn.Module):
         mel_loss_after_postnet = mask_mel_loss * nn.MSELoss(reduction='none')(mel_out_postnet, mel_target)
         mel_loss_after_postnet = torch.sum(mel_loss_after_postnet) / mask_mel_loss.sum().item()
 
-        print("before", mel_loss_before_postnet.item())
-        print("after", mel_loss_after_postnet.item())
-        print("gate", gate_loss.item())
-        print("attn", attn_loss.item())
         return 5 * (mel_loss_before_postnet + mel_loss_after_postnet) + gate_loss + attn_loss
