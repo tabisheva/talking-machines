@@ -18,7 +18,6 @@ import sys
 vocab = " abcdefghijklmnopqrstuvwxyz.,:;-?!"
 charToIdx = {c: i for i, c in enumerate(vocab)}
 
-model_config = ModelConfig()
 device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 model_config = ModelConfig()
 model = Tacotron2(model_config, device)
