@@ -18,7 +18,7 @@ class ModelConfig:
     lr: float = 0.001
     num_epochs: int = 20
     start_epoch: int = 0
-    model_path: str = "tacotron_mon.pth"
+    model_path: str = "tacotron.pth"
     wandb_log: bool = True
     num_channels: int = 80
 
