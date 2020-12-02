@@ -40,3 +40,12 @@ In `wandb.ai` will be logged:
 `python inference.py "Your text for speech synthesis" `
 
 The result will be logged in wandb.ai.
+
+You can use my pretrained model: 
+
+```python
+gdd.download_file_from_google_drive(
+    file_id='1gjOSUTyuFsdVOpPcLaEZjGHpgBEs_lTZ',
+    dest_path='./tacotron.ptt'
+)
+```
