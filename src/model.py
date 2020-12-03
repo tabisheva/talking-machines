@@ -94,7 +94,7 @@ class Decoder(nn.Module):
 
     def decode(self, decoder_input):
         '''
-        Decoder's main part
+        Decoder main part for mel spectrogram's one frame
         :param decoder_input: previous mel output after prenet (B, 256)
         :return: decoder_output, gate_output, attention_weights
         '''
@@ -105,34 +105,44 @@ class Decoder(nn.Module):
         # first LSTMCell with hidden_size 1024
         self.attention_hidden, self.attention_cell = self.attention_rnn(
             cell_input, (self.attention_hidden, self.attention_cell))
-
+        
+        # (B, 1024)
         self.attention_hidden = F.dropout(self.attention_hidden, 0.1)
 
         attention_weights_cat = torch.cat((self.attention_weights.unsqueeze(1),
                                            self.attention_weights_cum.unsqueeze(1)), dim=1)
-
+        
         self.attention_context, self.attention_weights = self.attention_layer(
             self.attention_hidden, self.memory, self.processed_memory, attention_weights_cat, self.mask)
         self.attention_weights_cum += self.attention_weights
-
+        
+        # (B, 1024 + 512)
         decoder_input = torch.cat((self.attention_hidden, self.attention_context), -1)
 
         # Second LSTMCell with hidden_size 1024
         self.decoder_hidden, self.decoder_cell = self.decoder_rnn(
             decoder_input, (self.decoder_hidden, self.decoder_cell))
+        
+        # (B, 1024)
         self.decoder_hidden = F.dropout(self.decoder_hidden, 0.1)
-
-        # linear layer for mel prediction
+        
+        # (B, 1024 + 512)
         decoder_hidden_attention_context = torch.cat((self.decoder_hidden, self.attention_context), dim=1)
+        
+        # linear layer for mel prediction (B, 80)
         decoder_output = self.linear_projection(decoder_hidden_attention_context)
 
-        # binary classifier for stop token
+        # binary classifier for stop token (B, 1)
         gate_prediction = torch.sigmoid(self.gate_layer(decoder_hidden_attention_context))
+        
         return decoder_output, gate_prediction, self.attention_weights
 
     def initialize_decoder_states(self, memory, mask):
         batch_size = memory.size(0)
         num_frames = memory.size(1)
+        self.mask = mask
+        self.memory = memory
+        self.processed_memory = self.attention_layer.memory(memory)
         self.attention_context = torch.zeros((batch_size, 512)).to(self.device)
         self.attention_hidden = torch.zeros((batch_size, 1024)).to(self.device)
         self.attention_cell = torch.zeros((batch_size, 1024)).to(self.device)
@@ -140,10 +150,7 @@ class Decoder(nn.Module):
         self.decoder_cell = torch.zeros((batch_size, 1024)).to(self.device)
         self.attention_weights = torch.zeros((batch_size, num_frames), requires_grad=True).to(self.device)
         self.attention_weights_cum = torch.zeros((batch_size, num_frames)).to(self.device)
-        self.memory = memory
-        self.processed_memory = self.attention_layer.memory(memory)
-        self.mask = mask
-
+        
     def forward(self, memory, decoder_inputs, memory_lengths):
         """
         :param memory: encoder outputs (B, T, 512)
@@ -163,6 +170,8 @@ class Decoder(nn.Module):
             memory, mask=~get_mask_from_lengths(memory_lengths, self.device))
 
         mel_outputs, gate_outputs, alignments = [], [], []
+        
+        # we don't need last frame for prediction
         for i in range(decoder_inputs.size(0) - 1):
             decoder_input = decoder_inputs[len(mel_outputs)]
             mel_output, gate_output, attention_weights = self.decode(decoder_input)
@@ -170,8 +179,8 @@ class Decoder(nn.Module):
             gate_outputs += [gate_output.squeeze()]
             alignments += [attention_weights]
         alignments = torch.stack(alignments).transpose(0, 1)
-        gate_outputs = torch.stack(gate_outputs).transpose(0, 1).contiguous()
-        mel_outputs = torch.stack(mel_outputs).transpose(0, 1).contiguous()
+        gate_outputs = torch.stack(gate_outputs).transpose(0, 1)
+        mel_outputs = torch.stack(mel_outputs).transpose(0, 1)
         mel_outputs = mel_outputs.view(mel_outputs.size(0), -1, 80)
         # (B, T_out, num_mels) -> (B, num_mels, T_out)
         mel_outputs = mel_outputs.transpose(1, 2)
@@ -181,7 +190,7 @@ class Decoder(nn.Module):
         """
         :param memory: encoder outputs (B, T, 512)
         :param memory_lengths: (B, )
-        :return: mel_outputs, gaye_outputs, alignments
+        :return: mel_outputs, gate_outputs, alignments
         """
 
         decoder_input = torch.zeros((1, memory.size(0), 80)).to(self.device).squeeze(0)
@@ -189,12 +198,14 @@ class Decoder(nn.Module):
             memory, mask=torch.ones_like(memory))
 
         mel_outputs, gate_outputs, alignments = [], [], []
+        # mean length of our mels is about 800-900
         for i in range(1000):
             decoder_input = self.prenet(decoder_input)
             mel_output, gate_output, attention_weights = self.decode(decoder_input)
             mel_outputs += [mel_output.squeeze(1)]
             gate_outputs += [gate_output.squeeze(0)]
             alignments += [attention_weights]
+            # more random numbers, it just works for a sigmoid
             if gate_output.item() > 0.6:
                 break
             decoder_input = mel_output
